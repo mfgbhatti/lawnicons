@@ -17,6 +17,7 @@
 package app.lawnchair.lawnicons.helper
 
 import com.android.ide.common.vectordrawable.Svg2Vector
+import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
 import java.nio.file.FileVisitOption
@@ -34,6 +35,10 @@ import org.dom4j.DocumentException
 import org.dom4j.DocumentHelper
 
 object SvgFilesProcessor {
+    private const val PLATE_NAME = "lawnicons_plate"
+
+    // Outer ring thickness on a 192-unit icon (8 is about 4% of the icon, 12 is about 6%).
+    private const val RING_WIDTH = 8
     private lateinit var sourceSvgPath: Path
     private lateinit var destinationVectorPath: Path
     fun process(sourceDirectory: String, destDirectory: String) {
@@ -86,8 +91,7 @@ object SvgFilesProcessor {
             val targetFile = XmlUtil.getFileWithExtension(vectorTargetPath)
             val fileOutputStream = FileOutputStream(targetFile)
             Svg2Vector.parseSvgToXml(svgSource, fileOutputStream)
-            val fg = "@color/primaryForeground"
-            val bg = "@color/primaryBackground"
+            val fg = "@android:color/white"
             try {
                 updateXmlPath(targetFile, "android:strokeColor", fg)
                 updateXmlPath(targetFile, "android:fillColor", fg)
@@ -95,14 +99,14 @@ object SvgFilesProcessor {
             } catch (e: DocumentException) {
                 throw RuntimeException(e)
             }
-            createAdaptive(targetFile, bg)
+            createAdaptive(targetFile)
         } else {
             println("Skipping file as its not svg " + svgSource.fileName)
         }
     }
 
     @Throws(IOException::class)
-    private fun createAdaptive(xmlPath: String, bgColor: String) {
+    private fun createAdaptive(xmlPath: String) {
         val foregroundXml = xmlPath.replace(".xml", "_foreground.xml")
         val foregroundFile = FileUtils.getFile(foregroundXml)
         foregroundFile.delete()
@@ -112,26 +116,48 @@ object SvgFilesProcessor {
         )
         val drawableName: String = FilenameUtils.getBaseName(xmlPath)
         val resPath: String = FilenameUtils.getFullPath(xmlPath)
+        createPlate(resPath)
         val document = DocumentHelper.createDocument()
-        val root = document.addElement("adaptive-icon")
+        // Plain (non-adaptive) drawable so launchers like Samsung Theme Park draw it as-is
+        // instead of re-theming the monochrome layer on their own plate.
+        val root = document.addElement("layer-list")
             .addAttribute("xmlns:android", "http://schemas.android.com/apk/res/android")
-        root.addElement("background")
-            .addAttribute("android:drawable", bgColor)
-        root.addElement("foreground").addElement("layer-list").addElement("item")
+        root.addElement("item")
+            .addAttribute("android:drawable", "@drawable/$PLATE_NAME")
+        // White glyph centered on the plate.
+        root.addElement("item")
             .addElement("inset")
-            .addAttribute("android:inset", "32%")
-            .addAttribute(
-                "android:drawable",
-                "@drawable/" + FilenameUtils.getBaseName(foregroundXml),
-            )
-        root.addElement("monochrome").addElement("layer-list").addElement("item")
-            .addElement("inset")
-            .addAttribute("android:inset", "28%")
+            .addAttribute("android:inset", "18%")
             .addAttribute(
                 "android:drawable",
                 "@drawable/" + FilenameUtils.getBaseName(foregroundXml),
             )
         XmlUtil.writeDocumentToFile(document, "$resPath$drawableName.xml")
+    }
+
+    // Shared round plate: 50% black fill with a white ring. It is a vector, so the ring
+    // thickness scales with the icon size instead of being a fixed dp value.
+    private fun createPlate(resPath: String) {
+        val plateFile = File("$resPath$PLATE_NAME.xml")
+        if (plateFile.exists()) return
+        val document = DocumentHelper.createDocument()
+        val root = document.addElement("vector")
+            .addAttribute("xmlns:android", "http://schemas.android.com/apk/res/android")
+            .addAttribute("android:width", "192dp")
+            .addAttribute("android:height", "192dp")
+            .addAttribute("android:viewportWidth", "192")
+            .addAttribute("android:viewportHeight", "192")
+        // Ring is centered on the path: outer edge = RADIUS + RING_WIDTH / 2 (must stay <= 96).
+        val radius = 96.0 - RING_WIDTH / 2.0 - 1
+        root.addElement("path")
+            .addAttribute("android:fillColor", "#80000000")
+            .addAttribute("android:strokeColor", "#FFFFFFFF")
+            .addAttribute("android:strokeWidth", RING_WIDTH.toString())
+            .addAttribute(
+                "android:pathData",
+                "M96,96m-$radius,0a$radius,$radius 0,1,1 ${radius * 2},0a$radius,$radius 0,1,1 -${radius * 2},0",
+            )
+        XmlUtil.writeDocumentToFile(document, plateFile.path)
     }
 
     private fun updateRootElement(xmlPath: String, key: String, value: String) {
